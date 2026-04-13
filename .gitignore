@@ -1,0 +1,32 @@
+```
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Test coverage
+.coverage
+htmlcov/
+.coverage.*
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Logs
+*.log
+
+# Dependencies
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+
+# Editors
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+```

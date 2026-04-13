@@ -21,6 +21,10 @@ from vrp_engine import (
     build_distance_matrix, get_default_warehouses, get_default_deliveries,
     get_default_vehicles, haversine, road_distance
 )
+from advanced_features import (
+    Depot, DriverAssignment, MultiDepotAllocator, DeliveryClusterer,
+    PDFRouteExporter, AdvancedVisualizations
+)
 
 # ─── HELPER: Convert hex to rgba for Plotly Sankey ───────────────────────────
 def hex_to_rgba(hex_color, alpha=0.4):
@@ -406,7 +410,8 @@ if solution and solution.routes:
     tabs = st.tabs([
         "🗺️ Route Map", "📊 Route Analysis", "🌿 Emissions", 
         "🚦 Traffic & Signals", "📈 Advanced Analytics",
-        "📋 Delivery Plan", "⚡ Scenario Comparison"
+        "📋 Delivery Plan", "⚡ Scenario Comparison",
+        "🎯 Clustering", "📄 PDF Reports"
     ])
 
     VEHICLE_COLORS = ['#4A9EFF', '#FF8C42', '#3DBA7E', '#BB86FC', '#FF6B9D', 

@@ -27,6 +27,9 @@ class DeliveryPoint(Location):
     demand: int = 100
     time_window: Tuple[int, int] = (6, 22)  # hours
     priority: int = 1  # 1=normal, 2=high, 3=urgent
+    service_time: int = 15  # minutes at location
+    ready_time: float = 0.0  # earliest service start (hours from midnight)
+    due_time: float = 24.0   # latest service end (hours from midnight)
 
 @dataclass
 class Vehicle:
@@ -36,6 +39,9 @@ class Vehicle:
     co2_per_km: float = 0.21  # kg CO2 per km
     speed_kmh: float = 30.0
     fuel_type: str = "Diesel"
+    shift_start: float = 8.0   # shift start time (hours from midnight)
+    shift_end: float = 20.0    # shift end time (hours from midnight)
+    max_route_time: float = 480.0  # max route duration in minutes
 
 @dataclass
 class TrafficConfig:
@@ -58,6 +64,10 @@ class RouteResult:
     capacity: int
     signal_delays: float  # minutes
     traffic_delay: float  # minutes
+    arrival_times: List[float] = field(default_factory=list)  # hours from midnight
+    wait_times: List[float] = field(default_factory=list)     # wait time at each stop (min)
+    time_window_violations: List[str] = field(default_factory=list)
+    depot_name: str = ""
 
 @dataclass
 class SolutionResult:
@@ -332,6 +342,43 @@ class HeuristicSolver:
             
             total_minutes = base_time + signal_delay + traffic_delay
             
+            # Time window calculations
+            arrival_times = []
+            wait_times = []
+            tw_violations = []
+            current_time = vehicle.shift_start * 60  # Convert to minutes from midnight
+            
+            for k, node_idx in enumerate(route_with_depot):
+                if k == 0:
+                    arrival_times.append(vehicle.shift_start)
+                    wait_times.append(0)
+                    continue
+                
+                # Travel to this node
+                prev_idx = route_with_depot[k-1]
+                travel_time = (dist_matrix[prev_idx][node_idx] / vehicle.speed_kmh) * 60
+                current_time += travel_time
+                
+                arrival_hour = current_time / 60.0
+                arrival_times.append(round(arrival_hour, 2))
+                
+                if node_idx > 0:  # Not depot
+                    dp = deliveries[node_idx - 1]
+                    ready_min = dp.ready_time * 60
+                    due_min = dp.due_time * 60
+                    service = dp.service_time
+                    
+                    # Wait if arrived early
+                    wait = max(0, ready_min - current_time)
+                    wait_times.append(round(wait, 1))
+                    current_time += wait
+                    
+                    # Check violation
+                    if current_time > due_min:
+                        tw_violations.append(f"{dp.name}: {wait/60:.1f}h late")
+                    
+                    current_time += service  # Service time
+            
             route_names = [all_locations[i].name for i in route_with_depot]
             
             rr = RouteResult(
@@ -345,7 +392,11 @@ class HeuristicSolver:
                 load_carried=load,
                 capacity=vehicle.capacity,
                 signal_delays=round(signal_delay, 1),
-                traffic_delay=round(traffic_delay, 1)
+                traffic_delay=round(traffic_delay, 1),
+                arrival_times=arrival_times,
+                wait_times=wait_times,
+                time_window_violations=tw_violations,
+                depot_name=depot.name
             )
             results.append(rr)
             total_cost += cost
@@ -519,6 +570,43 @@ class ORToolsSolver:
             traffic_delay = base_time * (traffic_mult - 1)
             total_minutes = base_time + signal_delay + traffic_delay
             
+            # Time window calculations
+            arrival_times = []
+            wait_times = []
+            tw_violations = []
+            current_time = vehicle.shift_start * 60  # Convert to minutes from midnight
+            
+            for k, node_idx in enumerate(route_indices):
+                if k == 0:
+                    arrival_times.append(vehicle.shift_start)
+                    wait_times.append(0)
+                    continue
+                
+                # Travel to this node
+                prev_idx = route_indices[k-1]
+                travel_time = (dist_matrix[prev_idx][node_idx] / vehicle.speed_kmh) * 60
+                current_time += travel_time
+                
+                arrival_hour = current_time / 60.0
+                arrival_times.append(round(arrival_hour, 2))
+                
+                if node_idx > 0:  # Not depot
+                    dp = deliveries[node_idx - 1]
+                    ready_min = dp.ready_time * 60
+                    due_min = dp.due_time * 60
+                    service = dp.service_time
+                    
+                    # Wait if arrived early
+                    wait = max(0, ready_min - current_time)
+                    wait_times.append(round(wait, 1))
+                    current_time += wait
+                    
+                    # Check violation
+                    if current_time > due_min:
+                        tw_violations.append(f"{dp.name}: {(current_time - due_min)/60:.1f}h late")
+                    
+                    current_time += service  # Service time
+            
             route_names = [all_locations[i].name for i in route_indices]
             
             rr = RouteResult(
@@ -532,7 +620,11 @@ class ORToolsSolver:
                 load_carried=load,
                 capacity=vehicle.capacity,
                 signal_delays=round(signal_delay, 1),
-                traffic_delay=round(traffic_delay, 1)
+                traffic_delay=round(traffic_delay, 1),
+                arrival_times=arrival_times,
+                wait_times=wait_times,
+                time_window_violations=tw_violations,
+                depot_name=depot.name
             )
             results.append(rr)
             total_cost += cost
@@ -629,28 +721,28 @@ def get_default_warehouses():
 
 def get_default_deliveries():
     return [
-        DeliveryPoint("Bandra", 19.0596, 72.8295, "Western Suburbs", 150, (8, 18), 2),
-        DeliveryPoint("Worli", 19.0096, 72.8179, "Central Mumbai", 200, (9, 17), 1),
-        DeliveryPoint("Colaba", 18.9067, 72.8147, "South Mumbai", 120, (8, 20), 3),
-        DeliveryPoint("Kurla", 19.0726, 72.8794, "Eastern Suburbs", 180, (7, 19), 1),
-        DeliveryPoint("Malad", 19.1872, 72.8484, "Extended Suburbs", 160, (8, 18), 2),
-        DeliveryPoint("Borivali", 19.2288, 72.8544, "Extended Suburbs", 140, (9, 20), 1),
-        DeliveryPoint("Powai", 19.1176, 72.9060, "Eastern Suburbs", 130, (8, 17), 2),
-        DeliveryPoint("Juhu", 19.1075, 72.8263, "Western Suburbs", 110, (10, 18), 1),
-        DeliveryPoint("Lower Parel", 19.0048, 72.8306, "Central Mumbai", 170, (8, 16), 3),
-        DeliveryPoint("Chembur", 19.0522, 72.8966, "Eastern Suburbs", 90, (9, 19), 1),
-        DeliveryPoint("Ghatkopar", 19.0860, 72.9080, "Eastern Suburbs", 100, (8, 18), 2),
-        DeliveryPoint("Thane", 19.2183, 72.9781, "Extended Suburbs", 200, (7, 20), 1),
-        DeliveryPoint("Vashi", 19.0771, 72.9986, "Navi Mumbai", 150, (8, 19), 2),
-        DeliveryPoint("Goregaon", 19.1663, 72.8526, "Western Suburbs", 120, (9, 17), 1),
-        DeliveryPoint("Santacruz", 19.0836, 72.8410, "Western Suburbs", 80, (8, 16), 1),
+        DeliveryPoint("Bandra", 19.0596, 72.8295, "Western Suburbs", 150, (8, 18), 2, 15, 8.0, 18.0),
+        DeliveryPoint("Worli", 19.0096, 72.8179, "Central Mumbai", 200, (9, 17), 1, 20, 9.0, 17.0),
+        DeliveryPoint("Colaba", 18.9067, 72.8147, "South Mumbai", 120, (8, 20), 3, 15, 8.0, 20.0),
+        DeliveryPoint("Kurla", 19.0726, 72.8794, "Eastern Suburbs", 180, (7, 19), 1, 10, 7.0, 19.0),
+        DeliveryPoint("Malad", 19.1872, 72.8484, "Extended Suburbs", 160, (8, 18), 2, 15, 8.0, 18.0),
+        DeliveryPoint("Borivali", 19.2288, 72.8544, "Extended Suburbs", 140, (9, 20), 1, 15, 9.0, 20.0),
+        DeliveryPoint("Powai", 19.1176, 72.9060, "Eastern Suburbs", 130, (8, 17), 2, 20, 8.0, 17.0),
+        DeliveryPoint("Juhu", 19.1075, 72.8263, "Western Suburbs", 110, (10, 18), 1, 15, 10.0, 18.0),
+        DeliveryPoint("Lower Parel", 19.0048, 72.8306, "Central Mumbai", 170, (8, 16), 3, 15, 8.0, 16.0),
+        DeliveryPoint("Chembur", 19.0522, 72.8966, "Eastern Suburbs", 90, (9, 19), 1, 10, 9.0, 19.0),
+        DeliveryPoint("Ghatkopar", 19.0860, 72.9080, "Eastern Suburbs", 100, (8, 18), 2, 15, 8.0, 18.0),
+        DeliveryPoint("Thane", 19.2183, 72.9781, "Extended Suburbs", 200, (7, 20), 1, 20, 7.0, 20.0),
+        DeliveryPoint("Vashi", 19.0771, 72.9986, "Navi Mumbai", 150, (8, 19), 2, 15, 8.0, 19.0),
+        DeliveryPoint("Goregaon", 19.1663, 72.8526, "Western Suburbs", 120, (9, 17), 1, 15, 9.0, 17.0),
+        DeliveryPoint("Santacruz", 19.0836, 72.8410, "Western Suburbs", 80, (8, 16), 1, 10, 8.0, 16.0),
     ]
 
 def get_default_vehicles():
     return [
-        Vehicle("Van-A (Diesel)", 500, 14.0, 0.27, 25.0, "Diesel"),
-        Vehicle("Van-B (CNG)", 400, 11.0, 0.18, 28.0, "CNG"),
-        Vehicle("Van-C (Electric)", 350, 8.0, 0.05, 30.0, "Electric"),
-        Vehicle("Van-D (Diesel)", 450, 13.0, 0.25, 26.0, "Diesel"),
-        Vehicle("Van-E (CNG)", 380, 10.5, 0.17, 27.0, "CNG"),
+        Vehicle("Van-A (Diesel)", 500, 14.0, 0.27, 25.0, "Diesel", 8.0, 20.0, 480.0),
+        Vehicle("Van-B (CNG)", 400, 11.0, 0.18, 28.0, "CNG", 8.0, 20.0, 480.0),
+        Vehicle("Van-C (Electric)", 350, 8.0, 0.05, 30.0, "Electric", 9.0, 18.0, 420.0),
+        Vehicle("Van-D (Diesel)", 450, 13.0, 0.25, 26.0, "Diesel", 8.0, 20.0, 480.0),
+        Vehicle("Van-E (CNG)", 380, 10.5, 0.17, 27.0, "CNG", 8.0, 20.0, 480.0),
     ]
