@@ -41,9 +41,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ─── CUSTOM CSS ────────────────────────────────────────────
 st.markdown("""
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600:700&family=Inter:wght@300:400:500:600&display=swap');
 
 /* Dark theme overrides */
 .stApp {
@@ -135,6 +135,7 @@ section[data-testid="stSidebar"] {
     border-radius: 8px;
     padding: 8px 16px;
 }
+</style>
 """, unsafe_allow_html=True)
 
 # ─── HEADER ────────────────────────────────────────────────
