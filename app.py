@@ -1193,6 +1193,157 @@ if solution and solution.routes:
         else:
             st.info("Run optimization first to see scenario comparisons.")
 
+    # ═══════════════════════════════════════════════════════
+    # TAB 7: CLUSTERING ANALYSIS
+    # ═══════════════════════════════════════════════════════
+    with tabs[7]:
+        st.markdown('<div class="section-header">🎯 K-Means Clustering Analysis</div>', unsafe_allow_html=True)
+        
+        if len(st.session_state.deliveries) >= 3:
+            cluster_col1, cluster_col2 = st.columns([2, 1])
+            
+            with cluster_col1:
+                num_clusters = st.slider("Number of Clusters", 2, min(8, len(st.session_state.deliveries)), 4, key="num_clusters")
+                
+                clusterer = DeliveryClusterer()
+                delivery_points = [(d.lat, d.lng) for d in st.session_state.deliveries]
+                clustering_result = clusterer.assign_clusters(delivery_points, num_clusters)
+                
+                fig_clusters = clusterer.plot_clusters(delivery_points, clustering_result['labels'], list(range(len(st.session_state.deliveries))))
+                st.plotly_chart(fig_clusters, use_container_width=True)
+            
+            with cluster_col2:
+                st.subheader("Cluster Summary")
+                cluster_df = pd.DataFrame({
+                    'Delivery ID': [d.id for d in st.session_state.deliveries],
+                    'Cluster': clustering_result['labels'],
+                    'Lat': [d.lat for d in st.session_state.deliveries],
+                    'Lng': [d.lng for d in st.session_state.deliveries]
+                })
+                st.dataframe(cluster_df, use_container_width=True)
+                
+                st.subheader("Cluster Sizes")
+                cluster_sizes = cluster_df['Cluster'].value_counts().sort_index()
+                for cluster_id, size in cluster_sizes.items():
+                    st.write(f"**Cluster {cluster_id}**: {size} deliveries")
+                
+                if 'centroids' in clustering_result:
+                    st.subheader("Centroid Coordinates")
+                    for i, centroid in enumerate(clustering_result['centroids']):
+                        st.write(f"Cluster {i}: ({centroid[0]:.4f}, {centroid[1]:.4f})")
+        else:
+            st.warning("Add at least 3 delivery points for clustering analysis")
+
+    # ═══════════════════════════════════════════════════════
+    # TAB 8: PDF REPORTS & EXPORT
+    # ═══════════════════════════════════════════════════════
+    with tabs[8]:
+        st.markdown('<div class="section-header">📄 PDF Reports & Export</div>', unsafe_allow_html=True)
+        
+        if 'solution' in st.session_state and st.session_state.solution:
+            solution = st.session_state.solution
+            
+            export_col1, export_col2 = st.columns(2)
+            
+            with export_col1:
+                st.subheader("Generate Route Sheets")
+                pdf_exporter = PDFRouteExporter()
+                
+                route_data = []
+                for route in solution.routes:
+                    route_info = {
+                        'vehicle_id': route.vehicle_id,
+                        'vehicle_name': route.vehicle_name,
+                        'stops': route.stops,
+                        'distance_km': route.distance_km,
+                        'time_min': route.time_min,
+                        'cost': route.cost,
+                        'emissions_kg': route.emissions_kg
+                    }
+                    route_data.append(route_info)
+                
+                warehouse_names = [w.name for w in st.session_state.warehouses]
+                delivery_names = [d.id for d in st.session_state.deliveries]
+                
+                try:
+                    pdf_bytes = pdf_exporter.generate_pdf_report(
+                        route_data=route_data,
+                        warehouse_names=warehouse_names,
+                        delivery_names=delivery_names,
+                        total_distance=solution.total_distance,
+                        total_time=solution.total_time,
+                        total_cost=solution.total_cost,
+                        total_emissions=solution.total_emissions
+                    )
+                    
+                    st.download_button(
+                        label="📥 Download PDF Route Sheets",
+                        data=pdf_bytes,
+                        file_name=f"route_sheets_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                    st.success("✅ PDF includes: Route maps, stop sequences, timing, costs, emissions")
+                except Exception as e:
+                    st.error(f"PDF generation error: {str(e)}")
+            
+            with export_col2:
+                st.subheader("Export Data")
+                
+                # Export routes as JSON
+                routes_json = json.dumps([{
+                    'vehicle_id': r.vehicle_id,
+                    'vehicle_name': r.vehicle_name,
+                    'stops': r.stops,
+                    'distance_km': r.distance_km,
+                    'time_min': r.time_min,
+                    'cost': r.cost
+                } for r in solution.routes], indent=2)
+                
+                st.download_button(
+                    label="📥 Download Routes (JSON)",
+                    data=routes_json,
+                    file_name=f"routes_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                # Export as CSV
+                csv_data = []
+                for route in solution.routes:
+                    for i, stop in enumerate(route.stops):
+                        csv_data.append({
+                            'Vehicle ID': route.vehicle_id,
+                            'Vehicle Name': route.vehicle_name,
+                            'Stop Sequence': i,
+                            'Location': stop,
+                            'Distance (km)': route.distance_km / len(route.stops) if route.stops else 0,
+                            'Time (min)': route.time_min / len(route.stops) if route.stops else 0
+                        })
+                
+                csv_df = pd.DataFrame(csv_data)
+                csv_buffer = io.StringIO()
+                csv_df.to_csv(csv_buffer, index=False)
+                
+                st.download_button(
+                    label="📥 Download Stops (CSV)",
+                    data=csv_buffer.getvalue(),
+                    file_name=f"stops_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+                
+                st.info("💡 Tip: Use PDF for driver handouts, JSON for API integration, CSV for Excel analysis")
+        else:
+            st.warning("⚠️ Run optimization first to generate reports")
+            st.info("After optimization, this tab will provide:")
+            st.markdown("""
+            - 📄 **PDF Route Sheets**: Printable documents for each driver
+            - 📊 **JSON Export**: Machine-readable format for APIs
+            - 📋 **CSV Export**: Spreadsheet-compatible stop lists
+            - 📈 **Summary Statistics**: Total distance, time, cost, emissions
+            """)
+
 else:
     # No solution yet — show getting started
     st.markdown(f"""
