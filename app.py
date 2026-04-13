@@ -15,13 +15,23 @@ from streamlit_folium import st_folium
 import json
 import math
 import io
-
 from vrp_engine import (
     Warehouse, DeliveryPoint, Vehicle, TrafficConfig, TrafficManager,
     HeuristicSolver, ORToolsSolver, ScenarioComparator,
     build_distance_matrix, get_default_warehouses, get_default_deliveries,
     get_default_vehicles, haversine, road_distance
 )
+
+# ─── HELPER: Convert hex to rgba for Plotly Sankey ───────────────────────────
+def hex_to_rgba(hex_color, alpha=0.4):
+    """Convert hex color (#RRGGBB) to rgba string with transparency for Plotly"""
+    hex_color = hex_color.lstrip('#')
+    if len(hex_color) == 6:
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        return f'rgba({r}, {g}, {b}, {alpha})'
+    return hex_color  # fallback
 
 # ─── PAGE CONFIG ───────────────────────────────────────────
 st.set_page_config(
@@ -33,7 +43,6 @@ st.set_page_config(
 
 # ─── CUSTOM CSS ────────────────────────────────────────────
 st.markdown("""
-<style>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
 
 /* Dark theme overrides */
@@ -126,7 +135,6 @@ section[data-testid="stSidebar"] {
     border-radius: 8px;
     padding: 8px 16px;
 }
-</style>
 """, unsafe_allow_html=True)
 
 # ─── HEADER ────────────────────────────────────────────────
@@ -158,18 +166,18 @@ with st.sidebar:
     solver_choice = st.selectbox("Solver Engine", 
         ["OR-Tools (Optimal)", "Heuristic (Fast)", "Both (Compare)"],
         help="OR-Tools: Google's constraint solver for optimal solutions\nHeuristic: Clarke-Wright Savings + 2-opt for fast solutions")
-    
+
     time_limit = st.slider("Solver Time Limit (sec)", 5, 120, 30, 5) if "OR-Tools" in solver_choice else 30
-    
+
     st.markdown("---")
-    
+
     # ── TRAFFIC SETTINGS ──
     st.markdown("### 🚦 Traffic Settings")
     time_of_day = st.selectbox("Time of Day",
         list(TrafficManager.TIME_PRESETS.keys()),
         format_func=lambda x: TrafficManager.TIME_PRESETS[x]["label"],
         index=0)
-    
+
     st.markdown("**Zone Traffic Intensity:**")
     zone_multipliers = {}
     zone_cols = st.columns(2)
@@ -179,20 +187,20 @@ with st.sidebar:
                 f"{zone}", 0.5, 3.0, 1.0, 0.1,
                 key=f"zone_{zone}",
                 help=f"Base traffic: {info['base_traffic']}x")
-    
+
     st.markdown("---")
-    
+
     # ── SIGNAL SETTINGS ──
     st.markdown("### 🚥 Signal Management")
     signal_cycle = st.slider("Signal Cycle Time (sec)", 60, 240, 120, 10)
     green_ratio = st.slider("Green Phase Ratio", 0.2, 0.7, 0.45, 0.05)
     signals_per_km = st.slider("Avg Signals/km", 0.5, 5.0, 2.5, 0.5)
-    
+
     st.markdown("---")
-    
+
     # ── WAREHOUSE MANAGEMENT ──
     st.markdown("### 🏭 Warehouses")
-    
+
     with st.expander("➕ Add New Warehouse", expanded=False):
         wh_name = st.text_input("Name", "New Warehouse", key="wh_name")
         wh_col1, wh_col2 = st.columns(2)
@@ -200,24 +208,24 @@ with st.sidebar:
         wh_lon = wh_col2.number_input("Longitude", 72.7, 73.2, 72.85, 0.001, key="wh_lon")
         wh_cap = st.number_input("Max Capacity", 100, 5000, 1000, 100, key="wh_cap")
         wh_cost = st.number_input("Daily Operating Cost (₹)", 100, 5000, 500, 50, key="wh_cost")
-        if st.button("Add Warehouse", use_container_width=True, type="primary"):
+        if st.button("Add Warehouse", width="stretch", type="primary"):
             st.session_state.warehouses.append(
                 Warehouse(wh_name, wh_lat, wh_lon, 
                          TrafficManager.get_zone(wh_name), wh_cap, wh_cost))
             st.rerun()
-    
+
     for i, wh in enumerate(st.session_state.warehouses):
         col1, col2 = st.columns([3, 1])
         col1.markdown(f"🏭 **{wh.name}** (Cap: {wh.max_capacity})")
         if col2.button("🗑️", key=f"del_wh_{i}"):
             st.session_state.warehouses.pop(i)
             st.rerun()
-    
+
     st.markdown("---")
-    
+
     # ── VEHICLE MANAGEMENT ──
     st.markdown("### 🚛 Vehicles")
-    
+
     with st.expander("➕ Add New Vehicle", expanded=False):
         v_name = st.text_input("Name", "Van-New", key="v_name")
         v_cap = st.number_input("Capacity (units)", 100, 2000, 400, 50, key="v_cap")
@@ -225,11 +233,11 @@ with st.sidebar:
         v_co2 = st.number_input("CO₂/km (kg)", 0.01, 1.0, 0.21, 0.01, key="v_co2")
         v_speed = st.number_input("Speed (km/h)", 10.0, 80.0, 28.0, 1.0, key="v_speed")
         v_fuel = st.selectbox("Fuel Type", ["Diesel", "CNG", "Electric", "Petrol", "Hybrid"], key="v_fuel")
-        if st.button("Add Vehicle", use_container_width=True, type="primary"):
+        if st.button("Add Vehicle", width="stretch", type="primary"):
             st.session_state.vehicles.append(
                 Vehicle(v_name, v_cap, v_cost, v_co2, v_speed, v_fuel))
             st.rerun()
-    
+
     for i, v in enumerate(st.session_state.vehicles):
         fuel_icon = {"Diesel": "⛽", "CNG": "🟢", "Electric": "⚡", "Petrol": "🔴", "Hybrid": "🔵"}.get(v.fuel_type, "🚛")
         col1, col2 = st.columns([3, 1])
@@ -237,12 +245,12 @@ with st.sidebar:
         if col2.button("🗑️", key=f"del_v_{i}"):
             st.session_state.vehicles.pop(i)
             st.rerun()
-    
+
     st.markdown("---")
-    
+
     # ── DELIVERY POINT MANAGEMENT ──
     st.markdown("### 📦 Delivery Points")
-    
+
     with st.expander("➕ Add Delivery Point", expanded=False):
         dp_name = st.text_input("Name", "New Location", key="dp_name")
         dp_col1, dp_col2 = st.columns(2)
@@ -251,12 +259,12 @@ with st.sidebar:
         dp_demand = st.number_input("Demand (units)", 10, 1000, 100, 10, key="dp_demand")
         dp_priority = st.selectbox("Priority", [1, 2, 3], 
             format_func=lambda x: {1: "Normal", 2: "High", 3: "Urgent"}[x], key="dp_priority")
-        if st.button("Add Delivery Point", use_container_width=True, type="primary"):
+        if st.button("Add Delivery Point", width="stretch", type="primary"):
             st.session_state.deliveries.append(
                 DeliveryPoint(dp_name, dp_lat, dp_lon,
                             TrafficManager.get_zone(dp_name), dp_demand, (8, 18), dp_priority))
             st.rerun()
-    
+
     st.markdown(f"**{len(st.session_state.deliveries)} delivery points loaded**")
     with st.expander("View All Delivery Points"):
         for i, dp in enumerate(st.session_state.deliveries):
@@ -266,13 +274,13 @@ with st.sidebar:
             if col2.button("🗑️", key=f"del_dp_{i}"):
                 st.session_state.deliveries.pop(i)
                 st.rerun()
-    
+
     st.markdown("---")
-    
+
     # ── LOAD/SAVE PROBLEM ──
     st.markdown("### 💾 Save/Load Problem")
-    
-    if st.button("📥 Export Problem as JSON", use_container_width=True):
+
+    if st.button("📥 Export Problem as JSON", width="stretch"):
         problem_data = {
             "warehouses": [{"name": w.name, "lat": w.lat, "lon": w.lon, 
                            "capacity": w.max_capacity, "cost": w.operating_cost}
@@ -281,12 +289,12 @@ with st.sidebar:
                            "demand": d.demand, "priority": d.priority}
                           for d in st.session_state.deliveries],
             "vehicles": [{"name": v.name, "capacity": v.capacity, "cost_per_km": v.cost_per_km,
-                         "co2_per_km": v.co2_per_km, "speed": v.speed_kmh, "fuel": v.fuel_type}
+                          "co2_per_km": v.co2_per_km, "speed": v.speed_kmh, "fuel": v.fuel_type}
                         for v in st.session_state.vehicles]
         }
         st.download_button("⬇️ Download JSON", json.dumps(problem_data, indent=2),
-                          "vrp_problem.json", "application/json", use_container_width=True)
-    
+                          "vrp_problem.json", "application/json", width="stretch")
+
     uploaded = st.file_uploader("📤 Load Problem JSON", type=["json"])
     if uploaded:
         try:
@@ -320,7 +328,7 @@ traffic_config = TrafficConfig(
 # ─── SOLVE BUTTON ─────────────────────────────────────────
 col_solve1, col_solve2, col_solve3 = st.columns([1, 2, 1])
 with col_solve2:
-    solve_btn = st.button("🚀 OPTIMIZE ROUTES", use_container_width=True, type="primary")
+    solve_btn = st.button("🚀 OPTIMIZE ROUTES", width="stretch", type="primary")
 
 if solve_btn:
     with st.spinner("🧮 Solving VRP... This may take a moment for large problems"):
@@ -351,12 +359,11 @@ solution = st.session_state.solution
 scenarios = st.session_state.scenarios
 
 if solution and solution.routes:
-    
     # ── TOP-LEVEL METRICS ──
     st.markdown('<div class="section-header">📊 Optimization Summary</div>', unsafe_allow_html=True)
-    
+
     m1, m2, m3, m4, m5, m6 = st.columns(6)
-    
+
     with m1:
         st.markdown(f"""<div class="metric-card">
             <div class="metric-label">Total Cost</div>
@@ -388,24 +395,24 @@ if solution and solution.routes:
             <div class="metric-label">Avg Utilization</div>
             <div class="metric-value" style="color: #FF6B9D;">{avg_util:.0f}%</div>
         </div>""", unsafe_allow_html=True)
-    
+
     st.markdown(f"<p style='text-align:center;color:#7a849a;margin-top:8px;'>Solver: <b>{solution.solver_used}</b></p>", unsafe_allow_html=True)
-    
+
     if solution.unserved:
         st.warning(f"⚠️ Unserved deliveries: {', '.join(solution.unserved)}")
-    
+
     # ─── MAIN TABS ─────────────────────────────────────────
     tabs = st.tabs([
         "🗺️ Route Map", "📊 Route Analysis", "🌿 Emissions", 
         "🚦 Traffic & Signals", "📈 Advanced Analytics",
         "📋 Delivery Plan", "⚡ Scenario Comparison"
     ])
-    
+
     VEHICLE_COLORS = ['#4A9EFF', '#FF8C42', '#3DBA7E', '#BB86FC', '#FF6B9D', 
                       '#e8c76d', '#00BCD4', '#FF5252', '#69F0AE', '#FFD740']
-    
+
     all_locations = st.session_state.warehouses + st.session_state.deliveries
-    
+
     # ═══════════════════════════════════════════════════════
     # TAB 1: ROUTE MAP
     # ═══════════════════════════════════════════════════════
@@ -533,8 +540,8 @@ if solution and solution.routes:
                 🌿 {route.total_co2:.2f} kg CO₂ | 
                 ⏱️ {route.total_time:.0f} min |
                 📦 {route.load_carried}/{route.capacity} units ({route.load_carried/route.capacity*100:.0f}%)
-            </div>""", unsafe_allow_html=True)
-    
+             </div>""", unsafe_allow_html=True)
+
     # ═══════════════════════════════════════════════════════
     # TAB 2: ROUTE ANALYSIS
     # ═══════════════════════════════════════════════════════
@@ -551,24 +558,24 @@ if solution and solution.routes:
             colors = [VEHICLE_COLORS[i % len(VEHICLE_COLORS)] for i in range(len(solution.routes))]
             
             fig.add_trace(go.Bar(x=names, y=costs, marker_color=colors,
-                                text=[f'₹{c:,.0f}' for c in costs], textposition='outside'))
+                               text=[f'₹{c:,.0f}' for c in costs], textposition='outside'))
             fig.update_layout(title="💰 Transportation Cost per Vehicle",
                             xaxis_title="Vehicle", yaxis_title="Cost (₹)",
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         with col2:
             # Distance per vehicle
             fig = go.Figure()
             dists = [r.total_distance for r in solution.routes]
             fig.add_trace(go.Bar(x=names, y=dists, marker_color=colors,
-                                text=[f'{d:.1f} km' for d in dists], textposition='outside'))
+                               text=[f'{d:.1f} km' for d in dists], textposition='outside'))
             fig.update_layout(title="📏 Distance per Vehicle",
                             xaxis_title="Vehicle", yaxis_title="Distance (km)",
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         col3, col4 = st.columns(2)
         
@@ -584,7 +591,7 @@ if solution and solution.routes:
             fig.update_layout(title="📦 Load Distribution",
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         with col4:
             # Vehicle utilization gauge
@@ -605,25 +612,25 @@ if solution and solution.routes:
                             yaxis_range=[0, 110], showlegend=False,
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         # Time breakdown stacked bar
         st.markdown("---")
         fig = go.Figure()
         base_times = [r.total_time - r.signal_delays - r.traffic_delay for r in solution.routes]
         fig.add_trace(go.Bar(name='Base Travel', x=names, y=base_times, 
-                            marker_color='#4A9EFF'))
+                           marker_color='#4A9EFF'))
         fig.add_trace(go.Bar(name='Traffic Delay', x=names, 
-                            y=[r.traffic_delay for r in solution.routes],
-                            marker_color='#FF8C42'))
+                           y=[r.traffic_delay for r in solution.routes],
+                           marker_color='#FF8C42'))
         fig.add_trace(go.Bar(name='Signal Delay', x=names, 
-                            y=[r.signal_delays for r in solution.routes],
-                            marker_color='#FF5252'))
+                           y=[r.signal_delays for r in solution.routes],
+                           marker_color='#FF5252'))
         fig.update_layout(title="⏱️ Time Breakdown per Vehicle (minutes)",
                         barmode='stack', template="plotly_dark", height=400,
                         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-        st.plotly_chart(fig, use_container_width=True)
-    
+        st.plotly_chart(fig, width="stretch")
+
     # ═══════════════════════════════════════════════════════
     # TAB 3: EMISSIONS
     # ═══════════════════════════════════════════════════════
@@ -637,12 +644,12 @@ if solution and solution.routes:
             co2s = [r.total_co2 for r in solution.routes]
             fig = go.Figure()
             fig.add_trace(go.Bar(x=names, y=co2s, marker_color=colors,
-                                text=[f'{c:.2f} kg' for c in co2s], textposition='outside'))
+                               text=[f'{c:.2f} kg' for c in co2s], textposition='outside'))
             fig.update_layout(title="🌿 CO₂ per Vehicle",
                             xaxis_title="Vehicle", yaxis_title="CO₂ (kg)",
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         with col2:
             # CO2 by fuel type
@@ -665,7 +672,7 @@ if solution and solution.routes:
             fig.update_layout(title="⛽ CO₂ by Fuel Type",
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         # CO2 vs Cost scatter (Pareto)
         fig = go.Figure()
@@ -682,7 +689,7 @@ if solution and solution.routes:
                         xaxis_title="Cost (₹)", yaxis_title="CO₂ (kg)",
                         template="plotly_dark", height=450,
                         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         # Emission intensity (CO2 per unit delivered)
         st.markdown("**Emission Intensity (CO₂ per unit delivered):**")
@@ -701,8 +708,8 @@ if solution and solution.routes:
                         title="🌱 CO₂ Intensity (g per unit delivered)")
             fig.update_layout(template="plotly_dark", height=350,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
-    
+            st.plotly_chart(fig, width="stretch")
+
     # ═══════════════════════════════════════════════════════
     # TAB 4: TRAFFIC & SIGNALS
     # ═══════════════════════════════════════════════════════
@@ -723,7 +730,7 @@ if solution and solution.routes:
             
             fig = go.Figure()
             fig.add_trace(go.Bar(x=zones, y=base_traffics, marker_color=zone_colors,
-                                text=[f'{t:.2f}x' for t in base_traffics], textposition='outside'))
+                               text=[f'{t:.2f}x' for t in base_traffics], textposition='outside'))
             fig.add_hline(y=1.5, line_dash="dash", line_color="#e8c76d",
                          annotation_text="Moderate Congestion")
             fig.add_hline(y=2.0, line_dash="dash", line_color="#FF5252",
@@ -732,21 +739,21 @@ if solution and solution.routes:
                             yaxis_title="Traffic Multiplier",
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         with col2:
             # Signal density
             signal_densities = [TrafficManager.MUMBAI_ZONES[z]["signals_per_km"] for z in zones]
             fig = go.Figure()
             fig.add_trace(go.Bar(x=zones, y=signal_densities,
-                                marker_color=['#4A9EFF' if s < 2.5 else '#FF8C42' if s < 3 else '#FF5252' 
-                                             for s in signal_densities],
-                                text=[f'{s:.1f}/km' for s in signal_densities], textposition='outside'))
+                               marker_color=['#4A9EFF' if s < 2.5 else '#FF8C42' if s < 3 else '#FF5252' 
+                                            for s in signal_densities],
+                               text=[f'{s:.1f}/km' for s in signal_densities], textposition='outside'))
             fig.update_layout(title="🚥 Signal Density by Zone",
                             yaxis_title="Signals per km",
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         # Traffic heatmap by zone and time
         st.markdown("---")
@@ -772,7 +779,7 @@ if solution and solution.routes:
         fig.update_layout(title="🌡️ Traffic Intensity Heatmap (Zone × Time)",
                         template="plotly_dark", height=400,
                         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         # Green wave analysis for each route
         st.markdown("---")
@@ -790,7 +797,7 @@ if solution and solution.routes:
                 
                 if gw:
                     gw_df = pd.DataFrame(gw)
-                    st.dataframe(gw_df, use_container_width=True, hide_index=True)
+                    st.dataframe(gw_df, width="stretch", hide_index=True)
                     
                     # Signal timing visualization
                     fig = go.Figure()
@@ -812,8 +819,8 @@ if solution and solution.routes:
                     fig.update_layout(barmode='stack', title=f"Signal Phases — {route.vehicle_name}",
                                     template="plotly_dark", height=300,
                                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-                    st.plotly_chart(fig, use_container_width=True)
-    
+                    st.plotly_chart(fig, width="stretch")
+
     # ═══════════════════════════════════════════════════════
     # TAB 5: ADVANCED ANALYTICS
     # ═══════════════════════════════════════════════════════
@@ -841,7 +848,7 @@ if solution and solution.routes:
             fig.update_layout(title="📍 Distance Matrix Heatmap (km)",
                             template="plotly_dark", height=500,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         with col2:
             # Shadow prices
@@ -862,7 +869,7 @@ if solution and solution.routes:
                                 xaxis_title="Shadow Price (₹/unit)",
                                 template="plotly_dark", height=500,
                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
         
         # Demand vs Capacity analysis
         st.markdown("---")
@@ -877,13 +884,13 @@ if solution and solution.routes:
             
             fig = go.Figure()
             fig.add_trace(go.Bar(x=dp_names, y=dp_demands, marker_color=dp_colors,
-                                text=dp_demands, textposition='outside'))
+                               text=dp_demands, textposition='outside'))
             fig.update_layout(title="📦 Demand per Delivery Point",
                             xaxis_title="Location", yaxis_title="Demand (units)",
                             template="plotly_dark", height=400,
                             xaxis_tickangle=-45,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         with col4:
             # Cumulative distance along routes
@@ -904,9 +911,9 @@ if solution and solution.routes:
                             xaxis_title="Stop Number", yaxis_title="Cumulative Distance (km)",
                             template="plotly_dark", height=400,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
-        # Sankey diagram: Warehouse → Delivery flow
+        # Sankey diagram: Warehouse → Delivery flow (✅ FIXED)
         st.markdown("---")
         sankey_labels = [wh.name for wh in st.session_state.warehouses]
         sankey_labels += [dp.name for dp in st.session_state.deliveries]
@@ -943,13 +950,13 @@ if solution and solution.routes:
                 ),
                 link=dict(
                     source=sources, target=targets, value=values,
-                    color=[c + '66' for c in link_colors]  # semi-transparent
+                    color=[hex_to_rgba(c, alpha=0.4) for c in link_colors]  # ✅ FIXED: rgba format
                 )
             )])
             fig.update_layout(title="🔀 Warehouse → Delivery Flow (Sankey)",
                             template="plotly_dark", height=500,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         # Radar chart per vehicle
         st.markdown("---")
@@ -989,8 +996,8 @@ if solution and solution.routes:
             template="plotly_dark", height=500,
             paper_bgcolor='rgba(0,0,0,0)'
         )
-        st.plotly_chart(fig, use_container_width=True)
-    
+        st.plotly_chart(fig, width="stretch")
+
     # ═══════════════════════════════════════════════════════
     # TAB 6: DELIVERY PLAN
     # ═══════════════════════════════════════════════════════
@@ -1034,13 +1041,13 @@ if solution and solution.routes:
         
         if plan_rows:
             df_plan = pd.DataFrame(plan_rows)
-            st.dataframe(df_plan, use_container_width=True, hide_index=True, height=500)
+            st.dataframe(df_plan, width="stretch", hide_index=True, height=500)
             
             # Download as CSV
             csv_buf = io.StringIO()
             df_plan.to_csv(csv_buf, index=False)
             st.download_button("📥 Download Delivery Plan (CSV)", csv_buf.getvalue(),
-                             "delivery_plan.csv", "text/csv", use_container_width=True)
+                              "delivery_plan.csv", "text/csv", width="stretch")
         
         # Recommendations
         st.markdown("---")
@@ -1090,7 +1097,7 @@ if solution and solution.routes:
         
         for rec in recommendations:
             st.markdown(f"- {rec}")
-    
+
     # ═══════════════════════════════════════════════════════
     # TAB 7: SCENARIO COMPARISON
     # ═══════════════════════════════════════════════════════
@@ -1111,22 +1118,22 @@ if solution and solution.routes:
             with col1:
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=sc_names, y=sc_costs, marker_color=sc_colors,
-                                    text=[f'₹{c:,.0f}' for c in sc_costs], textposition='outside'))
+                                   text=[f'₹{c:,.0f}' for c in sc_costs], textposition='outside'))
                 fig.update_layout(title="💰 Cost Comparison",
                                 yaxis_title="Total Cost (₹)",
                                 template="plotly_dark", height=400,
                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             
             with col2:
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=sc_names, y=sc_co2s, marker_color=sc_colors,
-                                    text=[f'{c:.2f} kg' for c in sc_co2s], textposition='outside'))
+                                   text=[f'{c:.2f} kg' for c in sc_co2s], textposition='outside'))
                 fig.update_layout(title="🌿 CO₂ Comparison",
                                 yaxis_title="Total CO₂ (kg)",
                                 template="plotly_dark", height=400,
                                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             
             # Grouped comparison
             fig = go.Figure()
@@ -1159,7 +1166,7 @@ if solution and solution.routes:
                             yaxis_title="% of Baseline",
                             template="plotly_dark", height=450,
                             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(26,29,46,0.8)')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
             # Detailed comparison table
             st.markdown("---")
@@ -1176,46 +1183,40 @@ if solution and solution.routes:
                     "Unserved": len(sc.unserved),
                     "Solver": sc.solver_used
                 })
-            st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(comp_data), width="stretch", hide_index=True)
         else:
             st.info("Run optimization first to see scenario comparisons.")
 
 else:
     # No solution yet — show getting started
-    st.markdown("""
-    <div style='text-align:center;padding:60px 20px;'>
-        <h2 style='color:#4A9EFF;font-family:Rajdhani;'>🚛 Ready to Optimize!</h2>
-        <p style='color:#7a849a;font-size:1.1rem;max-width:600px;margin:16px auto;'>
-            Configure your warehouses, vehicles, delivery points, and traffic settings in the sidebar.
-            Then click <b>🚀 OPTIMIZE ROUTES</b> to solve the Vehicle Routing Problem.
-        </p>
-        <div style='display:flex;justify-content:center;gap:40px;margin-top:32px;flex-wrap:wrap;'>
+    st.markdown(f"""
+    <div style='text-align:center;padding:40px;'>
+        <h2>🚛 Ready to Optimize!</h2>
+        <p style='color:#7a849a;margin:16px 0;'>Configure your warehouses, vehicles, delivery points, and traffic settings in the sidebar.<br>
+        Then click 🚀 OPTIMIZE ROUTES to solve the Vehicle Routing Problem.</p>
+        <div style='display:flex;justify-content:center;gap:24px;margin-top:24px;'>
             <div style='text-align:center;'>
-                <div style='font-size:2.5rem;'>🏭</div>
-                <div style='color:#4A9EFF;font-weight:600;'>{wh} Warehouses</div>
+                <div style='font-size:2rem;'>🏭</div>
+                <div>{len(st.session_state.warehouses)} Warehouses</div>
             </div>
             <div style='text-align:center;'>
-                <div style='font-size:2.5rem;'>📦</div>
-                <div style='color:#FF8C42;font-weight:600;'>{dp} Delivery Points</div>
+                <div style='font-size:2rem;'>📦</div>
+                <div>{len(st.session_state.deliveries)} Delivery Points</div>
             </div>
             <div style='text-align:center;'>
-                <div style='font-size:2.5rem;'>🚛</div>
-                <div style='color:#3DBA7E;font-weight:600;'>{vh} Vehicles</div>
+                <div style='font-size:2rem;'>🚛</div>
+                <div>{len(st.session_state.vehicles)} Vehicles</div>
             </div>
         </div>
     </div>
-    """.format(
-        wh=len(st.session_state.warehouses),
-        dp=len(st.session_state.deliveries),
-        vh=len(st.session_state.vehicles)
-    ), unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 # ─── FOOTER ────────────────────────────────────────────────
 st.markdown("---")
 st.markdown("""
-<div style='text-align:center;color:#7a849a;padding:16px;'>
-    <p>🚛 Urban Logistics VRP Optimizer — MPSTME NMIMS Mumbai</p>
-    <p style='font-size:0.8rem;'>Built with Streamlit • OR-Tools • Plotly • Folium | 
-    Vehicle Routing Problem with Traffic & Signal Intelligence</p>
+<div style='text-align:center;color:#7a849a;font-size:0.85rem;'>
+🚛 Urban Logistics VRP Optimizer — MPSTME NMIMS Mumbai<br>
+Built with Streamlit • OR-Tools • Plotly • Folium | 
+Vehicle Routing Problem with Traffic & Signal Intelligence
 </div>
 """, unsafe_allow_html=True)
